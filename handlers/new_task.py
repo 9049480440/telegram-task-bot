@@ -88,12 +88,30 @@ async def handle_text_reply(message: Message):
 
     elif step in ["ask_time", "edit_time"]:
         pending["time"] = message.text.strip()
+
         if step == "ask_time":
-            if pending.get("assigned_by") and pending["assigned_by"] not in {"", "null", None}:
+            # ✅ Автоматическая подстановка отправителя и подтверждение
+            if not pending.get("assigned_by") and pending.get("forwarded_from"):
+                pending["assigned_by"] = pending["forwarded_from"]
+                pending["step"] = "confirm_assigned_by"
+            elif pending.get("assigned_by") and pending["assigned_by"] not in {"", "null", None}:
                 pending["step"] = "ask_comment"
             else:
                 pending["step"] = "ask_assigned_by"
+
             update_pending_task(user_id, pending)
+
+            if pending["step"] == "confirm_assigned_by":
+                return await message.answer(
+                    f"👤 Я определил, что задачу поставил: <b>{pending['assigned_by']}</b>. Это верно?",
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                        [
+                            InlineKeyboardButton(text="✅ Да", callback_data="confirm_assigned_yes"),
+                            InlineKeyboardButton(text="❌ Нет", callback_data="confirm_assigned_no")
+                        ]
+                    ])
+                )
+
             if pending["step"] == "ask_comment":
                 return await message.answer("💬 Хочешь оставить комментарий?")
             return await message.answer("👤 Кто поставил задачу?")
@@ -134,7 +152,6 @@ async def handle_text_reply(message: Message):
 
     update_pending_task(user_id, pending)
 
-    
     return await message.answer(
         f"""📌 Задача: {pending.get('title', '–')}
 📅 Срок: {pending.get('deadline', '–')}
@@ -150,6 +167,7 @@ async def handle_text_reply(message: Message):
             ]
         ])
     )
+
 
 
 
