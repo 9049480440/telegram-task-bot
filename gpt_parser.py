@@ -56,7 +56,14 @@ def parse_task(text: str, files: list[str] = None, sender_name: str = None) -> d
             max_tokens=700,
         )
         content = response.choices[0].message["content"]
-        return json.loads(content)
+        print("GPT ответ:\n", content)
+
+        try:
+            return json.loads(content)
+        except json.JSONDecodeError as e:
+            print("❌ Ошибка разбора JSON:", e)
+            return {}
+
 
     except Exception as e:
         print("GPT error:", e)
