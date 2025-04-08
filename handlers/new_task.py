@@ -2,6 +2,7 @@ from aiogram import types
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message, CallbackQuery
 from database import add_pending_task, get_pending_task, update_pending_task, delete_pending_task
 from gpt_parser import parse_task
+from aiogram.fsm.storage.base import StorageKey
 
 
 def get_collect_keyboard():
@@ -175,6 +176,25 @@ async def route_message(message: Message):
     user_id = message.from_user.id
     pending = get_pending_task(user_id)
 
+    # Проверяем состояние FSM - если у нас есть активное состояние для комментария,
+    # то не обрабатываем сообщение как новую задачу
+    from aiogram.fsm.context import FSMContext
+    from aiogram.fsm.storage.memory import MemoryStorage
+    from task_actions import TaskStates
+    
+    # Создаем хранилище состояний и контекст
+    storage = MemoryStorage()
+    state_context = FSMContext(storage=storage, key=StorageKey(user_id=user_id, chat_id=message.chat.id, bot_id=0))
+    
+    # Проверяем состояние
+    current_state = await state_context.get_state()
+    
+    # Если мы в состоянии ожидания комментария, не обрабатываем сообщение как новую задачу
+    if current_state == TaskStates.waiting_for_comment.state:
+        # Позволяем обработчику комментариев обработать это сообщение
+        return
+
+    # Регулярный поток обработки сообщений
     if pending and pending.get("step") == "confirm":
         task_data = {
             "step": "collecting",
@@ -207,6 +227,7 @@ async def route_message(message: Message):
     }:
         return await handle_text_reply(message)
 
+    # Если дошли до этой точки, значит, это новая задача или сообщение без контекста
     task_data = {
         "step": "collecting",
         "messages": [message.text if message.text else message.caption],
@@ -227,6 +248,8 @@ async def route_message(message: Message):
         "📂 Начал сбор новой задачи. Перешли ещё сообщения или нажми «Готово».",
         reply_markup=get_collect_keyboard()
     )
+
+
 
 
 async def handle_reset_task(callback: CallbackQuery):
