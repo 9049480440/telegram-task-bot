@@ -1,6 +1,7 @@
-aiogram==3.x.x
-APScheduler==3.x.x
-openai
-python-dotenv
-sqlite3
-# И дополнительные библиотеки для работы с Google API (google-api-python-client, google-auth, и т.д.)
+aiogram==3.2.0
+APScheduler==3.10.4
+openai==1.14.3
+python-dotenv==1.0.1
+google-api-python-client==2.125.0
+google-auth==2.29.0
+google-auth-oauthlib==1.2.0

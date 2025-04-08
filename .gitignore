@@ -1,0 +1,7 @@
+.env
+db.sqlite3
+__pycache__/
+*.pyc
+*.log
+google_credentials.json
+client_secret_*.json
