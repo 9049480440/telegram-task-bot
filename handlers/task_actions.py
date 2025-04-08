@@ -461,17 +461,25 @@ async def handle_new_time_input(message: Message, state: FSMContext):
 
 def update_task_in_sheet(row, status, hours=None, comment=None):
     import gspread
+    import json
     from oauth2client.service_account import ServiceAccountCredentials
     import os
     from datetime import datetime
     
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    creds_path = os.getenv("GOOGLE_CREDENTIALS_PATH", "google_credentials.json")
-    creds = ServiceAccountCredentials.from_json_keyfile_name(creds_path, scope)
+    
+    # Получаем JSON из переменной окружения
+    creds_json = os.getenv("GOOGLE_CREDENTIALS_JSON")
+    
+    # Преобразуем строку в словарь
+    creds_dict = json.loads(creds_json)
+    
+    # Авторизуемся с помощью словаря
+    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
     client = gspread.authorize(creds)
     
     sheet_id = os.getenv("GOOGLE_SHEET_ID")
-    tab_name = os.getenv("GOOGLE_SHEET_TAB_NAME", "Катя Бачинина")
+    tab_name = os.getenv("GOOGLE_SHEET_TAB_NAME", "Tasks")
     
     sheet = client.open_by_key(sheet_id).worksheet(tab_name)
     
@@ -499,16 +507,24 @@ def update_task_in_sheet(row, status, hours=None, comment=None):
 # Функция для обновления срока в Google Sheets
 def update_deadline_in_sheet(row, new_deadline):
     import gspread
+    import json
     from oauth2client.service_account import ServiceAccountCredentials
     import os
     
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    creds_path = os.getenv("GOOGLE_CREDENTIALS_PATH", "google_credentials.json")
-    creds = ServiceAccountCredentials.from_json_keyfile_name(creds_path, scope)
+    
+    # Получаем JSON из переменной окружения
+    creds_json = os.getenv("GOOGLE_CREDENTIALS_JSON")
+    
+    # Преобразуем строку в словарь
+    creds_dict = json.loads(creds_json)
+    
+    # Авторизуемся с помощью словаря
+    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
     client = gspread.authorize(creds)
     
     sheet_id = os.getenv("GOOGLE_SHEET_ID")
-    tab_name = os.getenv("GOOGLE_SHEET_TAB_NAME", "Катя Бачинина")
+    tab_name = os.getenv("GOOGLE_SHEET_TAB_NAME", "Tasks")
     
     sheet = client.open_by_key(sheet_id).worksheet(tab_name)
     
