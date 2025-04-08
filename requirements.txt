@@ -1,6 +1,6 @@
 aiogram==3.2.0
 APScheduler==3.10.4
-openai==1.14.3
+openai==0.28.1
 python-dotenv==1.0.1
 google-api-python-client==2.125.0
 google-auth==2.29.0
