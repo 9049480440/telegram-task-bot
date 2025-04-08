@@ -6,10 +6,24 @@ from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime
 
 # Авторизация
+
+import json
+from io import StringIO
+
+from oauth2client.service_account import ServiceAccountCredentials
+
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-creds_path = os.getenv("GOOGLE_CREDENTIALS_PATH", "google_credentials.json")
-creds = ServiceAccountCredentials.from_json_keyfile_name(creds_path, scope)
+
+# Получаем JSON из переменной окружения
+creds_json = os.getenv("GOOGLE_CREDENTIALS_JSON")
+
+# Преобразуем строку в словарь
+creds_dict = json.loads(creds_json)
+
+# Авторизуемся с помощью словаря
+creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
 client = gspread.authorize(creds)
+
 
 def add_task_to_sheet(task):
     sheet_id = os.getenv("GOOGLE_SHEET_ID")
