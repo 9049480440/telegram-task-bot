@@ -111,6 +111,7 @@ async def handle_edit_field_selection(callback: CallbackQuery):
     await callback.message.answer(prompt)
 
 
+# Модифицированная функция handle_collect_done, улучшенная обработка файлов
 async def handle_collect_done(callback: CallbackQuery):
     user_id = callback.from_user.id
     pending = get_pending_task(user_id)
@@ -125,7 +126,18 @@ async def handle_collect_done(callback: CallbackQuery):
     safe_messages = [m for m in messages if isinstance(m, str)]
     combined_text = "\n".join(safe_messages)
 
+    # Добавляем информацию о файлах в text перед отправкой в GPT
     task_data = parse_task(combined_text, files=files, sender_name=sender_name)
+
+    # Обрабатываем случай, когда у нас есть файлы, но GPT не добавил их в комментарий
+    if files and (not task_data.get("comment") or "файл" not in task_data.get("comment", "").lower()):
+        # Если комментария нет или в нем нет упоминания файлов
+        files_text = "\n".join(f"📎 {f}" for f in files)
+        
+        if task_data.get("comment"):
+            task_data["comment"] += f"\n\n📂 Вложения:\n{files_text}"
+        else:
+            task_data["comment"] = f"📂 Вложения:\n{files_text}"
 
     update_fields = {
         "title": task_data.get("task_title"),
@@ -133,12 +145,14 @@ async def handle_collect_done(callback: CallbackQuery):
         "time": task_data.get("task_time"),
         "assigned_by": task_data.get("task_giver"),
         "comment": task_data.get("comment"),
+        "files": files,  # Убедимся, что files всегда сохраняются в pending_task
     }
 
     update_pending_task(user_id, update_fields)
 
     print("[DEBUG] assigned_by из GPT =", update_fields["assigned_by"])
     print("[DEBUG] forwarded_from из pending =", sender_name)
+    print("[DEBUG] files =", files)
 
     if not update_fields["deadline"]:
         update_pending_task(user_id, {**update_fields, "step": "ask_deadline"})
@@ -415,46 +429,85 @@ async def handle_new_deadline_input(message: Message, state: FSMContext):
     await state.set_state(TaskStates.waiting_for_new_time)
     await message.answer("⏰ Введите новое время в формате ЧЧ:ММ (например, 10:00)")
 
-# Обработчик для ввода нового времени
+# Обновленная функция для нормализации времени
+def normalize_time(time_str):
+    """
+    Преобразует время в формат HH:MM
+    Поддерживает:
+    - 'HH' (например, '10' -> '10:00')
+    - 'H' (например, '9' -> '09:00')
+    - 'HH:MM' (например, '10:30')
+    - 'H:MM' (например, '9:30' -> '09:30')
+    """
+    import re
+    
+    # Если строка пустая, вернуть значение по умолчанию
+    if not time_str or time_str.strip() == "":
+        return "10:00"  # Значение по умолчанию
+    
+    time_str = time_str.strip()
+    
+    # Если введено только число (часы)
+    if re.match(r"^\d{1,2}$", time_str):
+        hours = int(time_str)
+        if 0 <= hours <= 23:
+            return f"{hours:02d}:00"
+        else:
+            raise ValueError("Часы должны быть от 0 до 23")
+    
+    # Если введено время в формате HH:MM или H:MM
+    time_pattern = r"^(\d{1,2}):(\d{2})$"
+    match = re.match(time_pattern, time_str)
+    if match:
+        hours, minutes = map(int, match.groups())
+        if 0 <= hours <= 23 and 0 <= minutes <= 59:
+            return f"{hours:02d}:{minutes:02d}"
+        else:
+            raise ValueError("Неверный формат времени")
+    
+    raise ValueError("Неверный формат времени")
+
+# Обновленный обработчик для ввода нового времени
 async def handle_new_time_input(message: Message, state: FSMContext):
-    time_pattern = r"^([01]?[0-9]|2[0-3]):([0-5][0-9])$"
-    if not re.match(time_pattern, message.text):
-        await message.answer("⚠️ Некорректный формат времени. Пожалуйста, введите время в формате ЧЧ:ММ (например, 10:00)")
-        return
-    
-    data = await state.get_data()
-    task_id = data.get("task_id")
-    new_deadline = data.get("new_deadline")
-    new_time = message.text
-    
-    task = get_task_by_id(task_id)
-    if not task:
-        await message.answer("⚠️ Задача не найдена.")
+    try:
+        # Используем новую функцию для нормализации времени
+        new_time = normalize_time(message.text)
+        
+        data = await state.get_data()
+        task_id = data.get("task_id")
+        new_deadline = data.get("new_deadline")
+        
+        task = get_task_by_id(task_id)
+        if not task:
+            await message.answer("⚠️ Задача не найдена.")
+            await state.clear()
+            return
+        
+        # Обновляем срок в базе данных
+        conn = sqlite3.connect("db.sqlite3")
+        cursor = conn.cursor()
+        cursor.execute("UPDATE tasks SET deadline = ?, time = ? WHERE id = ?", 
+                      (new_deadline, new_time, task_id))
+        conn.commit()
+        conn.close()
+        
+        # Обновляем срок в Google Sheets
+        update_deadline_in_sheet(task[6], new_deadline)  # task[6] - sheet_row
+        
+        # Обновляем событие в календаре
+        if task[5]:  # task[5] - calendar_event_id
+            task_obj = {
+                "calendar_event_id": task[5],
+                "deadline": new_deadline,
+                "time": new_time
+            }
+            update_event(task_obj)
+        
+        await message.answer(f"⏳ Срок задачи \"{task[2]}\" продлен до {new_deadline} {new_time}")
         await state.clear()
-        return
-    
-    # Обновляем срок в базе данных
-    conn = sqlite3.connect("db.sqlite3")
-    cursor = conn.cursor()
-    cursor.execute("UPDATE tasks SET deadline = ?, time = ? WHERE id = ?", 
-                   (new_deadline, new_time, task_id))
-    conn.commit()
-    conn.close()
-    
-    # Обновляем срок в Google Sheets
-    update_deadline_in_sheet(task[6], new_deadline)  # task[6] - sheet_row
-    
-    # Обновляем событие в календаре
-    if task[5]:  # task[5] - calendar_event_id
-        task_obj = {
-            "calendar_event_id": task[5],
-            "deadline": new_deadline,
-            "time": new_time
-        }
-        update_event(task_obj)
-    
-    await message.answer(f"⏳ Срок задачи \"{task[2]}\" продлен до {new_deadline} {new_time}")
-    await state.clear()
+        
+    except ValueError as e:
+        await message.answer(f"⚠️ {str(e)}. Пожалуйста, введите время в одном из форматов: 10 (для 10:00) или 10:30")
 
 # Функция для обновления статуса задачи в Google Sheets
 # Обновленная функция для файла task_actions.py
