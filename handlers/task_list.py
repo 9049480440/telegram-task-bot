@@ -41,7 +41,8 @@ async def handle_task_list(message: types.Message, page=0):
         time = task[4] if task[4] else "—"  # time
         
         # Сокращаем название задачи, если оно слишком длинное
-        short_title = (title[:30] + "...") if len(title) > 30 else title
+        short_title = (title[:30] + "...") if title and len(title) > 30 else (title or "Без названия")
+
         
         # Добавляем информацию о задаче в список
         response += f"<b>{i+1}.</b> {short_title}\n"
