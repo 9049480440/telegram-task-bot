@@ -180,7 +180,7 @@ async def route_message(message: Message):
     # то не обрабатываем сообщение как новую задачу
     from aiogram.fsm.context import FSMContext
     from aiogram.fsm.storage.memory import MemoryStorage
-    from task_actions import TaskStates
+    from handlers.task_actions import TaskStates
     
     # Создаем хранилище состояний и контекст
     storage = MemoryStorage()
