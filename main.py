@@ -5,7 +5,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from dotenv import load_dotenv
 import os
 import logging
-import fcntl
+import time
 import sys
 
 # Настраиваем логирование
@@ -13,28 +13,19 @@ logging.basicConfig(level=logging.INFO,
                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Проверка на наличие других запущенных экземпляров
-def check_single_instance():
-    # Создаем файл блокировки
-    lock_file = "/tmp/telegram_bot.lock"
-    
-    try:
-        # Открываем файл и пытаемся получить блокировку
-        lock_handle = open(lock_file, 'w')
-        fcntl.flock(lock_handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        
-        # Записываем PID в файл блокировки
-        lock_handle.write(str(os.getpid()))
-        lock_handle.flush()
-        
-        # Не закрываем файл, чтобы сохранить блокировку
-        return lock_handle
-    except IOError:
+# Эта функция предотвратит запуск нескольких экземпляров бота на Render
+def ensure_single_instance():
+    # Создаем переменную окружения, которая будет индикатором запущенного бота
+    if os.environ.get("BOT_ALREADY_RUNNING") == "True":
         logger.error("Бот уже запущен! Завершение работы.")
         sys.exit(1)
+    
+    # Устанавливаем флаг запущенного бота
+    os.environ["BOT_ALREADY_RUNNING"] = "True"
+    logger.info("Инициализация экземпляра бота. Установлен флаг BOT_ALREADY_RUNNING=True")
 
-# Вызываем функцию проверки одиночного экземпляра
-lock_handle = check_single_instance()
+# Проверяем, запущен ли уже бот
+ensure_single_instance()
 
 from database import create_tables, get_pending_task, add_comment_column
 import scheduler
@@ -128,6 +119,8 @@ async def main():
         logger.error(f"Ошибка при запуске бота: {e}")
     finally:
         logger.info("Бот остановлен")
+        # Сбрасываем флаг запущенного бота при выходе
+        os.environ["BOT_ALREADY_RUNNING"] = "False"
 
 
 if __name__ == "__main__":
@@ -136,11 +129,12 @@ if __name__ == "__main__":
         add_comment_column()
         clear_pending_tasks()
         asyncio.run(main())
-    except (KeyboardInterrupt, SystemExit):
+    except KeyboardInterrupt:
         logger.info("Бот остановлен вручную!")
-    finally:
-        # Освобождаем файл блокировки при выходе
-        if lock_handle:
-            fcntl.flock(lock_handle, fcntl.LOCK_UN)
-            lock_handle.close()
-            logger.info("Файл блокировки освобожден")
+        os.environ["BOT_ALREADY_RUNNING"] = "False"
+    except SystemExit:
+        logger.info("Выход из программы")
+        os.environ["BOT_ALREADY_RUNNING"] = "False"
+    except Exception as e:
+        logger.error(f"Необработанное исключение: {e}")
+        os.environ["BOT_ALREADY_RUNNING"] = "False"

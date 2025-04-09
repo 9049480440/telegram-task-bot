@@ -82,13 +82,23 @@ async def handle_text_reply(message: Message):
 
     if step in ["ask_deadline", "edit_deadline"]:
         pending["deadline"] = message.text.strip()
+        update_pending_task(user_id, pending)
+        
         if step == "ask_deadline":
             pending["step"] = "ask_time"
             update_pending_task(user_id, pending)
             return await message.answer("⏰ Во сколько выполнить задачу?")
+        else:
+            # Проверяем остальные обязательные поля после редактирования даты
+            if not pending.get("time") or pending["time"] in ["null", "-", "None", None]:
+                pending["step"] = "ask_time"
+                update_pending_task(user_id, pending)
+                return await message.answer("⏰ Во сколько выполнить задачу?")
+            pending["step"] = "confirm"  # После редактирования переходим к подтверждению
 
     elif step in ["ask_time", "edit_time"]:
         pending["time"] = message.text.strip()
+        update_pending_task(user_id, pending)
 
         if step == "ask_time":
             # ✅ Автоматическая подстановка отправителя и подтверждение
@@ -116,13 +126,24 @@ async def handle_text_reply(message: Message):
             if pending["step"] == "ask_comment":
                 return await message.answer("💬 Хочешь оставить комментарий?")
             return await message.answer("👤 Кто поставил задачу?")
+        else:
+            # После редактирования времени проверяем отправителя
+            if not pending.get("assigned_by") or pending["assigned_by"] in ["null", "-", "None", None]:
+                pending["step"] = "ask_assigned_by"
+                update_pending_task(user_id, pending)
+                return await message.answer("👤 Кто поставил задачу?")
+            pending["step"] = "confirm"  # После редактирования переходим к подтверждению
 
     elif step in ["ask_assigned_by", "edit_assigned_by", "edit_assigned"]:
         pending["assigned_by"] = message.text.strip()
+        update_pending_task(user_id, pending)
+        
         if step == "ask_assigned_by":
             pending["step"] = "ask_comment"
             update_pending_task(user_id, pending)
             return await message.answer("💬 Хочешь оставить комментарий?")
+        else:
+            pending["step"] = "confirm"  # После редактирования переходим к подтверждению
 
     elif step == "confirm_assigned_by":
         if pending.get("assigned_by") and pending["assigned_by"] not in {"", "null", None}:
@@ -143,31 +164,57 @@ async def handle_text_reply(message: Message):
     elif step in ["ask_comment", "edit_comment"]:
         pending["comment"] = message.text.strip()
         pending["step"] = "confirm"
+        update_pending_task(user_id, pending)
 
     elif step == "edit_title":
         pending["title"] = message.text.strip()
         pending["step"] = "confirm"
+        update_pending_task(user_id, pending)
 
     else:
         return await message.answer("⚠️ Я немного запутался. Давай начнём заново — напиши /задача.")
 
-    update_pending_task(user_id, pending)
+    # Если мы дошли до этой точки, значит все поля должны быть заполнены
+    # Выполняем дополнительную проверку обязательных полей
+    if pending.get("step") == "confirm":
+        # Проверка обязательных полей перед отображением карточки задачи
+        if not pending.get("title"):
+            pending["step"] = "edit_title"
+            update_pending_task(user_id, pending)
+            return await message.answer("📝 Пожалуйста, введите название задачи:")
+            
+        if not pending.get("deadline") or pending["deadline"] in ["null", "-", "None", None]:
+            pending["step"] = "ask_deadline"
+            update_pending_task(user_id, pending)
+            return await message.answer("📅 До какого числа нужно сделать задачу?")
+            
+        if not pending.get("time") or pending["time"] in ["null", "-", "None", None]:
+            pending["step"] = "ask_time"
+            update_pending_task(user_id, pending)
+            return await message.answer("⏰ Во сколько выполнить задачу?")
+            
+        if not pending.get("assigned_by") or pending["assigned_by"] in ["null", "-", "None", None]:
+            pending["step"] = "ask_assigned_by"
+            update_pending_task(user_id, pending)
+            return await message.answer("👤 Кто поставил задачу?")
 
-    return await message.answer(
-        f"""📌 Задача: {pending.get('title', '–')}
+    # Если все проверки пройдены, отображаем карточку задачи для подтверждения
+    if pending.get("step") == "confirm":
+        return await message.answer(
+            f"""📌 Задача: {pending.get('title', '–')}
 📅 Срок: {pending.get('deadline', '–')}
 ⏰ Время: {pending.get('time', '–')}
 👤 Поставил: {pending.get('assigned_by', '–')}
 💬 Комментарий: {pending.get('comment', '–')}
 
 Добавить в таблицу и календарь?""",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [
-                InlineKeyboardButton(text="✅ Да", callback_data="confirm_add"),
-                InlineKeyboardButton(text="❌ Нет", callback_data="cancel_add")
-            ]
-        ])
-    )
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [
+                    InlineKeyboardButton(text="✅ Да", callback_data="confirm_add"),
+                    InlineKeyboardButton(text="❌ Нет", callback_data="cancel_add")
+                ]
+            ])
+        )
 
 
 
@@ -263,6 +310,17 @@ async def handle_confirm_assigned_yes(callback: CallbackQuery):
     pending = get_pending_task(user_id)
     if not pending:
         return await callback.message.answer("⚠️ Не удалось подтвердить имя.")
+    
+    # Проверяем наличие обязательных полей перед тем, как перейти к комментарию
+    if not pending.get("deadline") or pending["deadline"] in ["null", "-", "None", None]:
+        update_pending_task(user_id, {"step": "ask_deadline"})
+        return await callback.message.answer("📅 До какого числа нужно сделать задачу?")
+        
+    if not pending.get("time") or pending["time"] in ["null", "-", "None", None]:
+        update_pending_task(user_id, {"step": "ask_time"})
+        return await callback.message.answer("⏰ Во сколько выполнить задачу?")
+    
+    # Если все обязательные поля заполнены, переходим к запросу комментария
     update_pending_task(user_id, {"step": "ask_comment"})
     await callback.message.answer("💬 Хочешь оставить комментарий?")
 
