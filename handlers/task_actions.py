@@ -192,9 +192,39 @@ async def handle_confirm_add(callback: CallbackQuery):
     user_id = callback.from_user.id
     pending = get_pending_task(user_id)
 
-    if not pending or pending.get("step") != "confirm":
+    if not pending:
         return await callback.message.answer("⚠️ Не могу подтвердить задачу. Попробуй ещё раз.")
 
+    # Дополнительные проверки обязательных полей
+    if not pending.get("title"):
+        update_pending_task(user_id, {"step": "edit_title"})
+        return await callback.message.answer("📝 Пожалуйста, введите название задачи:")
+        
+    if not pending.get("deadline") or pending["deadline"] in ["null", "-", "None", None]:
+        update_pending_task(user_id, {"step": "ask_deadline"})
+        return await callback.message.answer("📅 До какого числа нужно сделать задачу?")
+        
+    if not pending.get("time") or pending["time"] in ["null", "-", "None", None]:
+        update_pending_task(user_id, {"step": "ask_time"})
+        return await callback.message.answer("⏰ Во сколько выполнить задачу?")
+        
+    if not pending.get("assigned_by") or pending["assigned_by"] in ["null", "-", "None", None]:
+        if pending.get("forwarded_from"):
+            # Если есть информация о пересланном сообщении, предлагаем её использовать
+            update_pending_task(user_id, {"step": "forwarded_confirm"})
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="✅ Да", callback_data="forwarded_yes"),
+                 InlineKeyboardButton(text="❌ Нет", callback_data="forwarded_no")]
+            ])
+            return await callback.message.answer(
+                f"👤 Вижу, что сообщение переслано от <b>{pending['forwarded_from']}</b>. Записать его как поставившего задачу?",
+                reply_markup=keyboard
+            )
+        else:
+            update_pending_task(user_id, {"step": "ask_assigned_by"})
+            return await callback.message.answer("👤 Кто поставил задачу?")
+
+    # Если все проверки пройдены, продолжаем
     task_id = str(uuid.uuid4())
     now = datetime.now().isoformat()
 
@@ -216,20 +246,35 @@ async def handle_confirm_add(callback: CallbackQuery):
         links=[]
     )
 
-    sheet_row = add_task_to_sheet(task_obj)
-    task_obj.sheet_row = sheet_row
-
-    calendar_event_id = add_task_to_calendar(
-        title=task_obj.title,
-        date=task_obj.deadline,
-        time=task_obj.time
-    )
-    task_obj.calendar_event_id = calendar_event_id
-
-    add_task(task_obj.__dict__)
-    delete_pending_task(user_id)
-
-    await callback.message.answer("✅ Задача добавлена в таблицу и календарь!")
+    try:
+        # Добавляем задачу в Google Sheet
+        sheet_row = add_task_to_sheet(task_obj)
+        task_obj.sheet_row = sheet_row
+        
+        # Добавляем задачу в Google Calendar
+        calendar_event_id = add_task_to_calendar(
+            title=task_obj.title,
+            date=task_obj.deadline,
+            time=task_obj.time
+        )
+        task_obj.calendar_event_id = calendar_event_id
+        
+        # Добавляем задачу в базу данных
+        add_task(task_obj.__dict__)
+        delete_pending_task(user_id)
+        
+        # Формируем сообщение о результате
+        result_message = f"✅ Задача добавлена:\n"
+        result_message += f"📝 {task_obj.title}\n"
+        result_message += f"📅 {task_obj.deadline} в {task_obj.time}\n"
+        result_message += f"👤 Поставил: {task_obj.assigned_by}\n"
+        
+        # Показываем клавиатуру при подтверждении задачи
+        from handlers.start import main_keyboard
+        await callback.message.answer(result_message, reply_markup=main_keyboard)
+    except Exception as e:
+        print(f"Ошибка при добавлении задачи: {e}")
+        await callback.message.answer("⚠️ Произошла ошибка при добавлении задачи. Пожалуйста, попробуйте еще раз.")
 
 
 async def handle_collect_cancel(callback: CallbackQuery):
@@ -247,9 +292,22 @@ async def handle_forwarded_yes(callback: CallbackQuery):
 
     update_pending_task(user_id, {
         "assigned_by": pending["forwarded_from"],
-        "step": "ask_comment"
+        "step": "confirm"  # Меняем шаг на "confirm" для перехода к проверке данных
     })
-    return await callback.message.answer("💬 Хочешь оставить комментарий?")
+    
+    # Проверяем все обязательные поля
+    if not pending.get("deadline") or pending["deadline"] in ["null", "-", "None", None]:
+        update_pending_task(user_id, {"step": "ask_deadline"})
+        return await callback.message.answer("📅 До какого числа нужно сделать задачу?")
+        
+    if not pending.get("time") or pending["time"] in ["null", "-", "None", None]:
+        update_pending_task(user_id, {"step": "ask_time"})
+        return await callback.message.answer("⏰ Во сколько выполнить задачу?")
+    
+    # Если все поля заполнены, показываем карточку задачи для подтверждения
+    updated_pending = get_pending_task(user_id)  # Получаем обновленные данные
+    text = format_task_card(updated_pending) + "\n\nДобавить в таблицу и календарь?"
+    await callback.message.answer(text, reply_markup=get_confirmation_keyboard())
 
 
 async def handle_forwarded_no(callback: CallbackQuery):

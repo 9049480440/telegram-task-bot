@@ -1,11 +1,40 @@
-# main.py
-
 import asyncio
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.fsm.storage.memory import MemoryStorage
 from dotenv import load_dotenv
 import os
+import logging
+import fcntl
+import sys
+
+# Настраиваем логирование
+logging.basicConfig(level=logging.INFO, 
+                   format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+# Проверка на наличие других запущенных экземпляров
+def check_single_instance():
+    # Создаем файл блокировки
+    lock_file = "/tmp/telegram_bot.lock"
+    
+    try:
+        # Открываем файл и пытаемся получить блокировку
+        lock_handle = open(lock_file, 'w')
+        fcntl.flock(lock_handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        
+        # Записываем PID в файл блокировки
+        lock_handle.write(str(os.getpid()))
+        lock_handle.flush()
+        
+        # Не закрываем файл, чтобы сохранить блокировку
+        return lock_handle
+    except IOError:
+        logger.error("Бот уже запущен! Завершение работы.")
+        sys.exit(1)
+
+# Вызываем функцию проверки одиночного экземпляра
+lock_handle = check_single_instance()
 
 from database import create_tables, get_pending_task, add_comment_column
 import scheduler
@@ -15,7 +44,8 @@ import handlers.task_actions as task_actions_handler
 import handlers.task_list as task_list_handler
 
 load_dotenv()
-print("DEBUG: BOT_TOKEN =", os.getenv("BOT_TOKEN"))
+logger.info("Загрузка переменных окружения")
+logger.info(f"BOT_TOKEN = {os.getenv('BOT_TOKEN')[:5]}...") # Показываем только первые 5 символов токена
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 bot = Bot(token=BOT_TOKEN, parse_mode="HTML")
@@ -28,6 +58,7 @@ def clear_pending_tasks():
     cursor.execute("DELETE FROM pending_tasks")
     conn.commit()
     conn.close()
+    logger.info("Очищены незавершенные задачи")
 
 
 async def handle_keyboard_tasks(message: types.Message):
@@ -40,6 +71,7 @@ async def handle_keyboard_new_task(message: types.Message):
 
 
 async def main():
+    logger.info("Запуск бота")
     storage = MemoryStorage()
     dp = Dispatcher(storage=storage)
 
@@ -86,12 +118,29 @@ async def main():
     # В конце регистрируем самый общий обработчик
     dp.message.register(new_task_handler.route_message)
 
+    # Запускаем планировщик задач
     scheduler.start_scheduler()
-    await dp.start_polling(bot)
+    
+    try:
+        logger.info("Запуск поллинга бота")
+        await dp.start_polling(bot)
+    except Exception as e:
+        logger.error(f"Ошибка при запуске бота: {e}")
+    finally:
+        logger.info("Бот остановлен")
 
 
 if __name__ == "__main__":
-    create_tables()
-    add_comment_column()
-    clear_pending_tasks()
-    asyncio.run(main())
+    try:
+        create_tables()
+        add_comment_column()
+        clear_pending_tasks()
+        asyncio.run(main())
+    except (KeyboardInterrupt, SystemExit):
+        logger.info("Бот остановлен вручную!")
+    finally:
+        # Освобождаем файл блокировки при выходе
+        if lock_handle:
+            fcntl.flock(lock_handle, fcntl.LOCK_UN)
+            lock_handle.close()
+            logger.info("Файл блокировки освобожден")

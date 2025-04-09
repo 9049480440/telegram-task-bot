@@ -7,7 +7,8 @@ main_keyboard = ReplyKeyboardMarkup(
         [KeyboardButton(text="📋 Мои задачи"), KeyboardButton(text="➕ Новая задача")]
     ],
     resize_keyboard=True,  # Уменьшает размер кнопок
-    persistent=True        # Клавиатура остается всегда
+    persistent=True,       # Клавиатура остается всегда
+    is_persistent=True     # Дублируем для совместимости с разными версиями aiogram
 )
 
 async def handle_start(message: types.Message):
@@ -25,3 +26,7 @@ async def handle_start(message: types.Message):
         "Используй кнопки внизу для быстрого доступа!",
         reply_markup=main_keyboard
     )
+
+# Функция для отображения клавиатуры в любом месте кода
+def get_main_keyboard():
+    return main_keyboard
