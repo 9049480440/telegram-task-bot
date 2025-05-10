@@ -9,9 +9,41 @@ import time
 import sys
 
 # Настраиваем логирование
-logging.basicConfig(level=logging.INFO, 
+logging.basicConfig(level=logging.INFO,
                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
+# Создаем директорию для логов, если она не существует
+import os
+log_dir = 'logs'
+if not os.path.exists(log_dir):
+    os.makedirs(log_dir)
+
+# Настраиваем вывод логов в консоль для Render
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.DEBUG)
+console_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+console_handler.setFormatter(console_formatter)
+logger.addHandler(console_handler)
+
+# Добавляем обработчик для записи логов в файл
+file_handler = logging.FileHandler(os.path.join(log_dir, 'bot_debug.log'))
+file_handler.setLevel(logging.DEBUG)
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+file_handler.setFormatter(formatter)
+logger.addHandler(file_handler)
+logger.setLevel(logging.DEBUG)
+
+# Также настраиваем логирование для модуля google_calendar
+calendar_logger = logging.getLogger('google_calendar')
+calendar_logger.addHandler(console_handler)
+calendar_logger.addHandler(file_handler)
+calendar_logger.setLevel(logging.DEBUG)
+
+# Записываем информацию о старте в лог
+logger.info("================================")
+logger.info("Запуск бота с расширенным логированием")
+logger.info("================================")
 
 # Эта функция предотвратит запуск нескольких экземпляров бота на Render
 def ensure_single_instance():

@@ -2,6 +2,20 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from datetime import datetime, timedelta
 import os
+import logging
+import json
+import traceback
+
+# Настраиваем логирование для этого модуля
+logger = logging.getLogger('google_calendar')
+if not logger.handlers:
+    # Если обработчиков еще нет, добавим один для вывода в консоль
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.DEBUG)
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    console_handler.setFormatter(formatter)
+    logger.addHandler(console_handler)
+    logger.setLevel(logging.DEBUG)
 
 def normalize_date(date_str):
     """
@@ -109,35 +123,76 @@ def get_calendar_service():
         client_id = os.getenv("GOOGLE_CLIENT_ID")
         client_secret = os.getenv("GOOGLE_CLIENT_SECRET")
 
-        print(f"Данные для аутентификации: client_id={client_id[:5]}..., refresh_token={refresh_token[:5] if refresh_token else None}...")
+        logger.debug(f"Получены данные для аутентификации Google Calendar")
 
-        creds = Credentials(
-            token=None,
-            refresh_token=refresh_token,
-            token_uri="https://oauth2.googleapis.com/token",
-            client_id=client_id,
-            client_secret=client_secret,
-            scopes=["https://www.googleapis.com/auth/calendar"]
-        )
-        service = build("calendar", "v3", credentials=creds)
-        print("Сервис календаря успешно создан")
-        return service
+        # Проверка наличия всех необходимых переменных
+        if not refresh_token:
+            logger.error("GOOGLE_REFRESH_TOKEN отсутствует или пустой")
+            raise ValueError("GOOGLE_REFRESH_TOKEN отсутствует или пустой")
+
+        if not client_id:
+            logger.error("GOOGLE_CLIENT_ID отсутствует или пустой")
+            raise ValueError("GOOGLE_CLIENT_ID отсутствует или пустой")
+
+        if not client_secret:
+            logger.error("GOOGLE_CLIENT_SECRET отсутствует или пустой")
+            raise ValueError("GOOGLE_CLIENT_SECRET отсутствует или пустой")
+
+        logger.info(f"Данные для аутентификации: client_id={client_id[:5]}..., refresh_token={refresh_token[:5] if refresh_token else None}...")
+
+        try:
+            creds = Credentials(
+                token=None,
+                refresh_token=refresh_token,
+                token_uri="https://oauth2.googleapis.com/token",
+                client_id=client_id,
+                client_secret=client_secret,
+                scopes=["https://www.googleapis.com/auth/calendar"]
+            )
+            logger.debug("Объект учетных данных создан")
+
+            service = build("calendar", "v3", credentials=creds)
+            logger.info("Сервис календаря успешно создан")
+
+            # Проверим подключение, запросив список календарей
+            try:
+                calendar_list = service.calendarList().list().execute()
+                calendar_count = len(calendar_list.get('items', []))
+                logger.info(f"Успешное подключение к Google Calendar API. Доступно {calendar_count} календарей.")
+            except Exception as cal_error:
+                logger.error(f"Подключение создано, но при запросе календарей возникла ошибка: {cal_error}")
+                logger.debug(f"Подробности ошибки: {traceback.format_exc()}")
+
+            return service
+        except Exception as cred_error:
+            logger.error(f"Ошибка при создании учетных данных: {cred_error}")
+            logger.debug(f"Детали ошибки: {traceback.format_exc()}")
+            raise
     except Exception as e:
-        print(f"ОШИБКА при создании сервиса календаря: {e}")
-        import traceback
-        print(f"Трассировка: {traceback.format_exc()}")
+        logger.error(f"ОШИБКА при создании сервиса календаря: {e}")
+        logger.debug(f"Полная трассировка: {traceback.format_exc()}")
         raise
 
 def create_event(task):
     try:
-        print(f"Начинаю создание события календаря для задачи: {task['title']}")
+        logger.info(f"Начинаю создание события календаря для задачи: {task['title']}")
+
+        # Проверяем наличие ID календаря
+        calendar_id = os.getenv("GOOGLE_CALENDAR_ID")
+        if not calendar_id:
+            logger.error("GOOGLE_CALENDAR_ID отсутствует или пустой")
+            raise ValueError("GOOGLE_CALENDAR_ID отсутствует или пустой")
+
+        logger.debug(f"ID календаря: {calendar_id}")
+
+        # Получаем сервис
         service = get_calendar_service()
-        print(f"Сервис календаря получен")
+        logger.info(f"Сервис календаря получен")
 
         # Используем normalize_date для преобразования формата даты
         iso_date = normalize_date(task['deadline'])
         start_time_str = f"{iso_date}T{task['time']}:00"
-        print(f"Дата и время начала: {start_time_str}")
+        logger.debug(f"Дата и время начала: {start_time_str}")
 
         start_time = datetime.fromisoformat(start_time_str)
         end_time = start_time + timedelta(hours=1)
@@ -154,63 +209,121 @@ def create_event(task):
             },
             "description": f"Задача из Telegram-бота",
         }
-        print(f"Сформирован объект события: {event}")
+        logger.debug(f"Сформирован объект события: {event}")
 
-        calendar_id = os.getenv("GOOGLE_CALENDAR_ID")
-        print(f"ID календаря: {calendar_id}")
-
-        created_event = service.events().insert(
-            calendarId=calendar_id,
-            body=event
+        # Попытка создать событие
+        try:
+            created_event = service.events().insert(
+                calendarId=calendar_id,
+                body=event
         ).execute()
 
-        event_id = created_event.get("id")
-        print(f"Событие успешно создано в календаре, ID: {event_id}")
-        return event_id
+            event_id = created_event.get("id")
+            logger.info(f"Событие успешно создано в календаре, ID: {event_id}")
+            return event_id
+        except Exception as insert_error:
+            logger.error(f"Ошибка при вставке события в календарь: {insert_error}")
+
+            # Проверим, действителен ли календарь
+            try:
+                service.calendars().get(calendarId=calendar_id).execute()
+                logger.info(f"Календарь с ID {calendar_id} существует и доступен")
+            except Exception as cal_error:
+                logger.error(f"Календарь с ID {calendar_id} не найден или недоступен: {cal_error}")
+
+            # Перебросим ошибку дальше
+            raise
     except Exception as e:
-        print(f"ОШИБКА при создании события в календаре: {e}")
-        import traceback
-        print(f"Трассировка: {traceback.format_exc()}")
+        logger.error(f"ОШИБКА при создании события в календаре: {e}")
+        logger.debug(f"Трассировка: {traceback.format_exc()}")
+
+        # Записываем всю доступную информацию
+        error_details = {
+            'error_type': type(e).__name__,
+            'error_message': str(e),
+            'task': task
+        }
+        logger.error(f"Детали ошибки: {json.dumps(error_details, ensure_ascii=False)}")
+
+        # В случае проблемы вернем None, чтобы бот мог продолжить работу
         return None
 
 
 def update_event(task):
     try:
-        print(f"Начинаю обновление события в календаре для задачи с ID: {task['calendar_event_id']}")
+        logger.info(f"Начинаю обновление события в календаре для задачи с ID: {task['calendar_event_id']}")
+
+        # Проверяем наличие ID календаря и ID события
+        calendar_id = os.getenv("GOOGLE_CALENDAR_ID")
+        if not calendar_id:
+            logger.error("GOOGLE_CALENDAR_ID отсутствует или пустой")
+            raise ValueError("GOOGLE_CALENDAR_ID отсутствует или пустой")
+
+        if not task["calendar_event_id"]:
+            logger.error("ID события календаря отсутствует")
+            raise ValueError("ID события календаря отсутствует")
+
+        logger.debug(f"ID календаря: {calendar_id}, ID события: {task['calendar_event_id']}")
+
+        # Получаем сервис
         service = get_calendar_service()
 
         iso_date = normalize_date(task['deadline'])
         start_time_str = f"{iso_date}T{task['time']}:00"
-        print(f"Новая дата и время начала: {start_time_str}")
+        logger.debug(f"Новая дата и время начала: {start_time_str}")
 
         start_time = datetime.fromisoformat(start_time_str)
         end_time = start_time + timedelta(hours=1)
 
-        calendar_id = os.getenv("GOOGLE_CALENDAR_ID")
-        print(f"ID календаря: {calendar_id}, ID события: {task['calendar_event_id']}")
+        # Получаем существующее событие
+        try:
+            event = service.events().get(
+                calendarId=calendar_id,
+                eventId=task["calendar_event_id"]
+            ).execute()
+            logger.debug(f"Получено существующее событие")
+        except Exception as get_error:
+            logger.error(f"Событие не найдено в календаре: {get_error}")
+            # Если событие не существует, создадим новое
+            logger.info("Создаю новое событие вместо обновления.")
+            new_task = {
+                "title": task.get("title", "Задача без названия"),
+                "deadline": task["deadline"],
+                "time": task["time"]
+            }
+            return create_event(new_task)
 
-        event = service.events().get(
-            calendarId=calendar_id,
-            eventId=task["calendar_event_id"]
-        ).execute()
-        print(f"Получено существующее событие")
-
+        # Обновляем данные события
         event["start"]["dateTime"] = start_time.isoformat()
         event["end"]["dateTime"] = end_time.isoformat()
 
-        updated_event = service.events().update(
-            calendarId=calendar_id,
-            eventId=task["calendar_event_id"],
-            body=event
-        ).execute()
+        # Обновляем событие в календаре
+        try:
+            updated_event = service.events().update(
+                calendarId=calendar_id,
+                eventId=task["calendar_event_id"],
+                body=event
+            ).execute()
 
-        event_id = updated_event.get("id")
-        print(f"Событие успешно обновлено в календаре, ID: {event_id}")
-        return event_id
+            event_id = updated_event.get("id")
+            logger.info(f"Событие успешно обновлено в календаре, ID: {event_id}")
+            return event_id
+        except Exception as update_error:
+            logger.error(f"Ошибка при обновлении события в календаре: {update_error}")
+            raise
+
     except Exception as e:
-        print(f"ОШИБКА при обновлении события в календаре: {e}")
-        import traceback
-        print(f"Трассировка: {traceback.format_exc()}")
+        logger.error(f"ОШИБКА при обновлении события в календаре: {e}")
+        logger.debug(f"Трассировка: {traceback.format_exc()}")
+
+        # Записываем детали ошибки
+        error_details = {
+            'error_type': type(e).__name__,
+            'error_message': str(e),
+            'task_id': task.get('calendar_event_id')
+        }
+        logger.error(f"Детали ошибки: {json.dumps(error_details, ensure_ascii=False)}")
+
         return None
 
 def delete_event(event_id):

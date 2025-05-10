@@ -189,25 +189,31 @@ async def handle_collect_done(callback: CallbackQuery):
 
 
 async def handle_confirm_add(callback: CallbackQuery):
+    import logging
+    logger = logging.getLogger('task_actions')
+
     user_id = callback.from_user.id
+    logger.info(f"Обработка подтверждения добавления задачи от пользователя {user_id}")
+
     pending = get_pending_task(user_id)
 
     if not pending:
+        logger.warning(f"Задача для подтверждения не найдена у пользователя {user_id}")
         return await callback.message.answer("⚠️ Не могу подтвердить задачу. Попробуй ещё раз.")
 
     # Дополнительные проверки обязательных полей
     if not pending.get("title"):
         update_pending_task(user_id, {"step": "edit_title"})
         return await callback.message.answer("📝 Пожалуйста, введите название задачи:")
-        
+
     if not pending.get("deadline") or pending["deadline"] in ["null", "-", "None", None]:
         update_pending_task(user_id, {"step": "ask_deadline"})
         return await callback.message.answer("📅 До какого числа нужно сделать задачу?")
-        
+
     if not pending.get("time") or pending["time"] in ["null", "-", "None", None]:
         update_pending_task(user_id, {"step": "ask_time"})
         return await callback.message.answer("⏰ Во сколько выполнить задачу?")
-        
+
     if not pending.get("assigned_by") or pending["assigned_by"] in ["null", "-", "None", None]:
         if pending.get("forwarded_from"):
             # Если есть информация о пересланном сообщении, предлагаем её использовать
@@ -247,33 +253,64 @@ async def handle_confirm_add(callback: CallbackQuery):
     )
 
     try:
+        logger.info(f"Начинаем добавление задачи: {task_obj.title}")
+
         # Добавляем задачу в Google Sheet
+        logger.info("Добавление задачи в Google Sheets...")
         sheet_row = add_task_to_sheet(task_obj)
         task_obj.sheet_row = sheet_row
-        
+        logger.info(f"Задача добавлена в Google Sheets, строка {sheet_row}")
+
         # Добавляем задачу в Google Calendar
-        calendar_event_id = add_task_to_calendar(
-            title=task_obj.title,
-            date=task_obj.deadline,
-            time=task_obj.time
-        )
-        task_obj.calendar_event_id = calendar_event_id
-        
+        logger.info("Добавление задачи в Google Calendar...")
+        try:
+            calendar_event_id = add_task_to_calendar(
+                title=task_obj.title,
+                date=task_obj.deadline,
+                time=task_obj.time
+            )
+
+            if calendar_event_id:
+                task_obj.calendar_event_id = calendar_event_id
+                logger.info(f"Задача добавлена в Google Calendar, ID: {calendar_event_id}")
+            else:
+                logger.error("Не удалось получить ID события календаря")
+                task_obj.calendar_event_id = "error_calendar_id"  # Временный ID для отслеживания
+        except Exception as calendar_error:
+            logger.error(f"Ошибка при добавлении задачи в Google Calendar: {calendar_error}")
+            # Продолжаем выполнение даже при ошибке с календарем
+            task_obj.calendar_event_id = "error_calendar_id"
+
         # Добавляем задачу в базу данных
+        logger.info("Добавление задачи в локальную базу данных...")
         add_task(task_obj.__dict__)
         delete_pending_task(user_id)
-        
+        logger.info(f"Задача {task_id} успешно добавлена в базу данных")
+
+        # Форматируем дату для отображения
+        formatted_date = task_obj.deadline
+        try:
+            date_obj = datetime.strptime(task_obj.deadline, "%Y-%m-%d")
+            formatted_date = date_obj.strftime("%d.%m.%Y")
+        except:
+            pass
+
         # Формируем сообщение о результате
         result_message = f"✅ Задача добавлена:\n"
         result_message += f"📝 {task_obj.title}\n"
-        result_message += f"📅 {task_obj.deadline} в {task_obj.time}\n"
+        result_message += f"📅 {formatted_date} в {task_obj.time}\n"
         result_message += f"👤 Поставил: {task_obj.assigned_by}\n"
-        
+
+        # Если были проблемы с календарем, добавляем предупреждение
+        if task_obj.calendar_event_id == "error_calendar_id":
+            result_message += "\n⚠️ Задача добавлена в таблицу, но не добавлена в календарь. Администратор уведомлен о проблеме."
+
         # Показываем клавиатуру при подтверждении задачи
         from handlers.start import main_keyboard
         await callback.message.answer(result_message, reply_markup=main_keyboard)
+
     except Exception as e:
-        print(f"Ошибка при добавлении задачи: {e}")
+        logger.error(f"Ошибка при добавлении задачи: {e}", exc_info=True)
         await callback.message.answer("⚠️ Произошла ошибка при добавлении задачи. Пожалуйста, попробуйте еще раз.")
 
 
