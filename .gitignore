@@ -5,3 +5,5 @@ __pycache__/
 *.log
 google_credentials.json
 client_secret_*.json
+
+**/.claude/settings.local.json

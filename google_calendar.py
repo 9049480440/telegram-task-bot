@@ -27,71 +27,114 @@ def normalize_date(date_str):
 
 
 def get_calendar_service():
-    creds = Credentials(
-        token=None,
-        refresh_token=os.getenv("GOOGLE_REFRESH_TOKEN"),
-        token_uri="https://oauth2.googleapis.com/token",
-        client_id=os.getenv("GOOGLE_CLIENT_ID"),
-        client_secret=os.getenv("GOOGLE_CLIENT_SECRET"),
-        scopes=["https://www.googleapis.com/auth/calendar"]
-    )
-    service = build("calendar", "v3", credentials=creds)
-    return service
+    try:
+        refresh_token = os.getenv("GOOGLE_REFRESH_TOKEN")
+        client_id = os.getenv("GOOGLE_CLIENT_ID")
+        client_secret = os.getenv("GOOGLE_CLIENT_SECRET")
+
+        print(f"Данные для аутентификации: client_id={client_id[:5]}..., refresh_token={refresh_token[:5] if refresh_token else None}...")
+
+        creds = Credentials(
+            token=None,
+            refresh_token=refresh_token,
+            token_uri="https://oauth2.googleapis.com/token",
+            client_id=client_id,
+            client_secret=client_secret,
+            scopes=["https://www.googleapis.com/auth/calendar"]
+        )
+        service = build("calendar", "v3", credentials=creds)
+        print("Сервис календаря успешно создан")
+        return service
+    except Exception as e:
+        print(f"ОШИБКА при создании сервиса календаря: {e}")
+        import traceback
+        print(f"Трассировка: {traceback.format_exc()}")
+        raise
 
 def create_event(task):
-    service = get_calendar_service()
+    try:
+        print(f"Начинаю создание события календаря для задачи: {task['title']}")
+        service = get_calendar_service()
+        print(f"Сервис календаря получен")
 
-    # Используем normalize_date для преобразования формата даты
-    iso_date = normalize_date(task['deadline'])
-    start_time_str = f"{iso_date}T{task['time']}:00"
+        # Используем normalize_date для преобразования формата даты
+        iso_date = normalize_date(task['deadline'])
+        start_time_str = f"{iso_date}T{task['time']}:00"
+        print(f"Дата и время начала: {start_time_str}")
 
-    start_time = datetime.fromisoformat(start_time_str)
-    end_time = start_time + timedelta(hours=1)
+        start_time = datetime.fromisoformat(start_time_str)
+        end_time = start_time + timedelta(hours=1)
 
-    event = {
-        "summary": task["title"],
-        "start": {
-            "dateTime": start_time.isoformat(),
-            "timeZone": "Asia/Yekaterinburg"
-        },
-        "end": {
-            "dateTime": end_time.isoformat(),
-            "timeZone": "Asia/Yekaterinburg"
-        },
-        "description": f"Задача из Telegram-бота",
-    }
+        event = {
+            "summary": task["title"],
+            "start": {
+                "dateTime": start_time.isoformat(),
+                "timeZone": "Asia/Yekaterinburg"
+            },
+            "end": {
+                "dateTime": end_time.isoformat(),
+                "timeZone": "Asia/Yekaterinburg"
+            },
+            "description": f"Задача из Telegram-бота",
+        }
+        print(f"Сформирован объект события: {event}")
 
-    created_event = service.events().insert(
-        calendarId=os.getenv("GOOGLE_CALENDAR_ID"),
-        body=event
-    ).execute()
+        calendar_id = os.getenv("GOOGLE_CALENDAR_ID")
+        print(f"ID календаря: {calendar_id}")
 
-    return created_event.get("id")
+        created_event = service.events().insert(
+            calendarId=calendar_id,
+            body=event
+        ).execute()
+
+        event_id = created_event.get("id")
+        print(f"Событие успешно создано в календаре, ID: {event_id}")
+        return event_id
+    except Exception as e:
+        print(f"ОШИБКА при создании события в календаре: {e}")
+        import traceback
+        print(f"Трассировка: {traceback.format_exc()}")
+        return None
 
 
 def update_event(task):
-    service = get_calendar_service()
+    try:
+        print(f"Начинаю обновление события в календаре для задачи с ID: {task['calendar_event_id']}")
+        service = get_calendar_service()
 
-    iso_date = normalize_date(task['deadline'])
-    start_time_str = f"{iso_date}T{task['time']}:00"
-    start_time = datetime.fromisoformat(start_time_str)
-    end_time = start_time + timedelta(hours=1)  # Добавляем определение end_time
+        iso_date = normalize_date(task['deadline'])
+        start_time_str = f"{iso_date}T{task['time']}:00"
+        print(f"Новая дата и время начала: {start_time_str}")
 
-    event = service.events().get(
-        calendarId=os.getenv("GOOGLE_CALENDAR_ID"),
-        eventId=task["calendar_event_id"]
-    ).execute()
+        start_time = datetime.fromisoformat(start_time_str)
+        end_time = start_time + timedelta(hours=1)
 
-    event["start"]["dateTime"] = start_time.isoformat()
-    event["end"]["dateTime"] = end_time.isoformat()
+        calendar_id = os.getenv("GOOGLE_CALENDAR_ID")
+        print(f"ID календаря: {calendar_id}, ID события: {task['calendar_event_id']}")
 
-    updated_event = service.events().update(
-        calendarId=os.getenv("GOOGLE_CALENDAR_ID"),
-        eventId=task["calendar_event_id"],
-        body=event
-    ).execute()
+        event = service.events().get(
+            calendarId=calendar_id,
+            eventId=task["calendar_event_id"]
+        ).execute()
+        print(f"Получено существующее событие")
 
-    return updated_event.get("id")
+        event["start"]["dateTime"] = start_time.isoformat()
+        event["end"]["dateTime"] = end_time.isoformat()
+
+        updated_event = service.events().update(
+            calendarId=calendar_id,
+            eventId=task["calendar_event_id"],
+            body=event
+        ).execute()
+
+        event_id = updated_event.get("id")
+        print(f"Событие успешно обновлено в календаре, ID: {event_id}")
+        return event_id
+    except Exception as e:
+        print(f"ОШИБКА при обновлении события в календаре: {e}")
+        import traceback
+        print(f"Трассировка: {traceback.format_exc()}")
+        return None
 
 def delete_event(event_id):
     """
@@ -120,9 +163,16 @@ def delete_event(event_id):
 
 
 def add_task_to_calendar(title, date, time):
-    task = {
-        "title": title,
-        "deadline": date,
-        "time": time
-    }
-    return create_event(task)
+    try:
+        print(f"Добавление задачи в календарь: '{title}', дата={date}, время={time}")
+        task = {
+            "title": title,
+            "deadline": date,
+            "time": time
+        }
+        return create_event(task)
+    except Exception as e:
+        print(f"ОШИБКА при добавлении задачи в календарь: {e}")
+        import traceback
+        print(f"Трассировка: {traceback.format_exc()}")
+        return None
