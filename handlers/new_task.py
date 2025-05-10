@@ -81,58 +81,70 @@ async def handle_text_reply(message: Message):
     step = pending.get("step")
 
     if step in ["ask_deadline", "edit_deadline"]:
-        pending["deadline"] = message.text.strip()
-        update_pending_task(user_id, pending)
-        
-        if step == "ask_deadline":
-            pending["step"] = "ask_time"
+        try:
+            # Используем функцию нормализации даты
+            from google_calendar import normalize_date
+            normalized_date = normalize_date(message.text.strip())
+            pending["deadline"] = normalized_date
             update_pending_task(user_id, pending)
-            return await message.answer("⏰ Во сколько выполнить задачу?")
-        else:
-            # Проверяем остальные обязательные поля после редактирования даты
-            if not pending.get("time") or pending["time"] in ["null", "-", "None", None]:
+
+            if step == "ask_deadline":
                 pending["step"] = "ask_time"
                 update_pending_task(user_id, pending)
-                return await message.answer("⏰ Во сколько выполнить задачу?")
-            pending["step"] = "confirm"  # После редактирования переходим к подтверждению
+                return await message.answer("⏰ Во сколько выполнить задачу? (например, 10:00, 15:30 или просто '10')")
+            else:
+                # Проверяем остальные обязательные поля после редактирования даты
+                if not pending.get("time") or pending["time"] in ["null", "-", "None", None]:
+                    pending["step"] = "ask_time"
+                    update_pending_task(user_id, pending)
+                    return await message.answer("⏰ Во сколько выполнить задачу? (например, 10:00, 15:30 или просто '10')")
+                pending["step"] = "confirm"  # После редактирования переходим к подтверждению
+        except ValueError as e:
+            return await message.answer(f"⚠️ {str(e)}. Пожалуйста, введите дату в формате ДД.ММ, ДД.ММ.ГГ, или используйте слова 'завтра', 'послезавтра', 'понедельник'...")
 
     elif step in ["ask_time", "edit_time"]:
-        pending["time"] = message.text.strip()
-        update_pending_task(user_id, pending)
-
-        if step == "ask_time":
-            # ✅ Автоматическая подстановка отправителя и подтверждение
-            if not pending.get("assigned_by") and pending.get("forwarded_from"):
-                pending["assigned_by"] = pending["forwarded_from"]
-                pending["step"] = "confirm_assigned_by"
-            elif pending.get("assigned_by") and pending["assigned_by"] not in {"", "null", None}:
-                pending["step"] = "ask_comment"
-            else:
-                pending["step"] = "ask_assigned_by"
-
+        try:
+            # Используем функцию нормализации времени
+            from handlers.task_actions import normalize_time
+            normalized_time = normalize_time(message.text.strip())
+            pending["time"] = normalized_time
             update_pending_task(user_id, pending)
 
-            if pending["step"] == "confirm_assigned_by":
-                return await message.answer(
-                    f"👤 Я определил, что задачу поставил: <b>{pending['assigned_by']}</b>. Это верно?",
-                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                        [
-                            InlineKeyboardButton(text="✅ Да", callback_data="confirm_assigned_yes"),
-                            InlineKeyboardButton(text="❌ Нет", callback_data="confirm_assigned_no")
-                        ]
-                    ])
-                )
+            if step == "ask_time":
+                # ✅ Автоматическая подстановка отправителя и подтверждение
+                if not pending.get("assigned_by") and pending.get("forwarded_from"):
+                    pending["assigned_by"] = pending["forwarded_from"]
+                    pending["step"] = "confirm_assigned_by"
+                elif pending.get("assigned_by") and pending["assigned_by"] not in {"", "null", None}:
+                    pending["step"] = "ask_comment"
+                else:
+                    pending["step"] = "ask_assigned_by"
 
-            if pending["step"] == "ask_comment":
-                return await message.answer("💬 Хочешь оставить комментарий?")
-            return await message.answer("👤 Кто поставил задачу?")
-        else:
-            # После редактирования времени проверяем отправителя
-            if not pending.get("assigned_by") or pending["assigned_by"] in ["null", "-", "None", None]:
-                pending["step"] = "ask_assigned_by"
                 update_pending_task(user_id, pending)
+
+                if pending["step"] == "confirm_assigned_by":
+                    return await message.answer(
+                        f"👤 Я определил, что задачу поставил: <b>{pending['assigned_by']}</b>. Это верно?",
+                        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                            [
+                                InlineKeyboardButton(text="✅ Да", callback_data="confirm_assigned_yes"),
+                                InlineKeyboardButton(text="❌ Нет", callback_data="confirm_assigned_no")
+                            ]
+                        ])
+                    )
+
+                if pending["step"] == "ask_comment":
+                    return await message.answer("💬 Хочешь оставить комментарий?")
                 return await message.answer("👤 Кто поставил задачу?")
-            pending["step"] = "confirm"  # После редактирования переходим к подтверждению
+            else:
+                # После редактирования времени проверяем отправителя
+                if not pending.get("assigned_by") or pending["assigned_by"] in ["null", "-", "None", None]:
+                    pending["step"] = "ask_assigned_by"
+                    update_pending_task(user_id, pending)
+                    return await message.answer("👤 Кто поставил задачу?")
+                pending["step"] = "confirm"  # После редактирования переходим к подтверждению
+        except ValueError as e:
+            return await message.answer(f"⚠️ {str(e)}. Пожалуйста, введите время в формате ЧЧ:ММ или просто число часов.")
 
     elif step in ["ask_assigned_by", "edit_assigned_by", "edit_assigned"]:
         pending["assigned_by"] = message.text.strip()

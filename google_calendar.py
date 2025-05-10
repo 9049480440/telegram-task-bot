@@ -6,24 +6,101 @@ import os
 def normalize_date(date_str):
     """
     Преобразует дату в формат YYYY-MM-DD
-    Поддерживает:
-    - 'DD.MM'
-    - 'DD.MM.YY'
-    - 'YYYY-MM-DD'
+    Поддерживает разные форматы:
+    - 'DD.MM' - текущий год
+    - 'DD.MM.YY' - 20YY год
+    - 'DD.MM.YYYY' - полный формат
+    - 'DD/MM' - текущий год
+    - 'DD/MM/YY' - 20YY год
+    - 'YYYY-MM-DD' - ISO формат
+    - 'завтра' - завтрашний день
+    - 'сегодня' - сегодняшний день
+    - 'понедельник', 'вторник' и т.д. - ближайший указанный день недели
     """
+    date_str = date_str.strip().lower()
+    today = datetime.now()
+
+    # Проверяем специальные ключевые слова
+    if date_str in ['сегодня', 'today']:
+        return today.strftime("%Y-%m-%d")
+
+    if date_str in ['завтра', 'tomorrow']:
+        tomorrow = today + timedelta(days=1)
+        return tomorrow.strftime("%Y-%m-%d")
+
+    # Дни недели
+    days_ru = {
+        'понедельник': 0, 'вторник': 1, 'среда': 2, 'четверг': 3,
+        'пятница': 4, 'суббота': 5, 'воскресенье': 6
+    }
+    days_en = {
+        'monday': 0, 'tuesday': 1, 'wednesday': 2, 'thursday': 3,
+        'friday': 4, 'saturday': 5, 'sunday': 6
+    }
+
+    # Сокращенные названия дней недели
+    short_days_ru = {
+        'пн': 0, 'вт': 1, 'ср': 2, 'чт': 3, 'пт': 4, 'сб': 5, 'вс': 6
+    }
+    short_days_en = {
+        'mon': 0, 'tue': 1, 'wed': 2, 'thu': 3, 'fri': 4, 'sat': 5, 'sun': 6
+    }
+
+    # Объединяем все словари
+    all_days = {**days_ru, **days_en, **short_days_ru, **short_days_en}
+
+    if date_str in all_days:
+        target_day = all_days[date_str]
+        current_day = today.weekday()
+        days_ahead = target_day - current_day
+        if days_ahead <= 0:  # Если день уже прошел на этой неделе, берем следующую
+            days_ahead += 7
+        target_date = today + timedelta(days=days_ahead)
+        return target_date.strftime("%Y-%m-%d")
+
+    # Обработка обычных дат в разных форматах
     if "." in date_str:
-        parts = date_str.strip().split(".")
-        if len(parts) == 2:
-            day, month = parts
-            year = str(datetime.now().year)  # используем текущий год
-        elif len(parts) == 3:
-            day, month, year = parts
-            if len(year) == 2:
-                year = "20" + year
-        else:
-            raise ValueError("Неверный формат даты (ожидается DD.MM или DD.MM.YY)")
+        parts = date_str.split(".")
+    elif "/" in date_str:
+        parts = date_str.split("/")
+    elif "-" in date_str and len(date_str.split("-")) == 3:
+        # Проверяем, что это формат YYYY-MM-DD
+        parts = date_str.split("-")
+        if len(parts[0]) == 4:  # Если первая часть - год (YYYY)
+            return date_str  # Возвращаем как есть
+        # Иначе обрабатываем как DD-MM-YYYY
+        day, month, year = parts
         return f"{year}-{month.zfill(2)}-{day.zfill(2)}"
-    return date_str  # уже в ISO (YYYY-MM-DD)
+    else:
+        raise ValueError("Неверный формат даты")
+
+    if len(parts) == 2:
+        day, month = parts
+        year = str(today.year)  # Используем текущий год
+    elif len(parts) == 3:
+        day, month, year = parts
+        if len(year) == 2:
+            year = "20" + year
+    else:
+        raise ValueError("Неверный формат даты")
+
+    # Проверяем корректность даты
+    try:
+        # Проверяем, что день и месяц - числа
+        day = int(day)
+        month = int(month)
+        year = int(year)
+
+        # Проверяем диапазоны
+        if not (1 <= day <= 31) or not (1 <= month <= 12):
+            raise ValueError("Неверный день или месяц")
+
+        # Проверяем существование даты (например, 30 февраля)
+        datetime(year, month, day)
+    except ValueError as e:
+        raise ValueError(f"Некорректная дата: {e}")
+
+    return f"{year}-{month:02d}-{day:02d}"
 
 
 def get_calendar_service():

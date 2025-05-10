@@ -498,24 +498,47 @@ async def handle_new_deadline_input(message: Message, state: FSMContext):
     await state.set_state(TaskStates.waiting_for_new_time)
     await message.answer("⏰ Введите новое время в формате ЧЧ:ММ (например, 10:00)")
 
-# Обновленная функция для нормализации времени
+# Улучшенная функция для нормализации времени
 def normalize_time(time_str):
     """
     Преобразует время в формат HH:MM
-    Поддерживает:
+    Поддерживает различные форматы:
     - 'HH' (например, '10' -> '10:00')
     - 'H' (например, '9' -> '09:00')
     - 'HH:MM' (например, '10:30')
     - 'H:MM' (например, '9:30' -> '09:30')
+    - 'HH.MM' (например, '10.30' -> '10:30')
+    - 'H.MM' (например, '9.30' -> '09:30')
+    - 'утро' -> '09:00'
+    - 'день' -> '13:00'
+    - 'вечер' -> '18:00'
+    - 'ночь' -> '23:00'
     """
     import re
-    
+
     # Если строка пустая, вернуть значение по умолчанию
     if not time_str or time_str.strip() == "":
         return "10:00"  # Значение по умолчанию
-    
-    time_str = time_str.strip()
-    
+
+    time_str = time_str.strip().lower()
+
+    # Обработка ключевых слов для времени суток
+    time_keywords = {
+        'утро': '09:00',
+        'утром': '09:00',
+        'день': '13:00',
+        'днем': '13:00',
+        'вечер': '18:00',
+        'вечером': '18:00',
+        'ночь': '23:00',
+        'ночью': '23:00',
+        'полдень': '12:00',
+        'полночь': '00:00'
+    }
+
+    if time_str in time_keywords:
+        return time_keywords[time_str]
+
     # Если введено только число (часы)
     if re.match(r"^\d{1,2}$", time_str):
         hours = int(time_str)
@@ -523,46 +546,62 @@ def normalize_time(time_str):
             return f"{hours:02d}:00"
         else:
             raise ValueError("Часы должны быть от 0 до 23")
-    
-    # Если введено время в формате HH:MM или H:MM
-    time_pattern = r"^(\d{1,2}):(\d{2})$"
-    match = re.match(time_pattern, time_str)
-    if match:
-        hours, minutes = map(int, match.groups())
-        if 0 <= hours <= 23 and 0 <= minutes <= 59:
-            return f"{hours:02d}:{minutes:02d}"
+
+    # Если введено время в формате HH:MM, H:MM, HH.MM или H.MM
+    time_colon_pattern = r"^(\d{1,2}):(\d{2})$"
+    time_dot_pattern = r"^(\d{1,2})\.(\d{2})$"
+
+    match_colon = re.match(time_colon_pattern, time_str)
+    match_dot = re.match(time_dot_pattern, time_str)
+
+    if match_colon:
+        hours, minutes = map(int, match_colon.groups())
+    elif match_dot:
+        hours, minutes = map(int, match_dot.groups())
+    else:
+        # Проверяем другие возможные форматы
+        time_extra_pattern = r"^(\d{1,2})[^\d](\d{2})$"
+        match_extra = re.match(time_extra_pattern, time_str)
+        if match_extra:
+            hours, minutes = map(int, match_extra.groups())
         else:
             raise ValueError("Неверный формат времени")
-    
-    raise ValueError("Неверный формат времени")
+
+    # Проверяем диапазоны для часов и минут
+    if not (0 <= hours <= 23):
+        raise ValueError("Часы должны быть от 0 до 23")
+    if not (0 <= minutes <= 59):
+        raise ValueError("Минуты должны быть от 0 до 59")
+
+    return f"{hours:02d}:{minutes:02d}"
 
 # Обновленный обработчик для ввода нового времени
 async def handle_new_time_input(message: Message, state: FSMContext):
     try:
-        # Используем новую функцию для нормализации времени
+        # Используем функцию для нормализации времени
         new_time = normalize_time(message.text)
-        
+
         data = await state.get_data()
         task_id = data.get("task_id")
         new_deadline = data.get("new_deadline")
-        
+
         task = get_task_by_id(task_id)
         if not task:
             await message.answer("⚠️ Задача не найдена.")
             await state.clear()
             return
-        
+
         # Обновляем срок в базе данных
         conn = sqlite3.connect("db.sqlite3")
         cursor = conn.cursor()
-        cursor.execute("UPDATE tasks SET deadline = ?, time = ? WHERE id = ?", 
+        cursor.execute("UPDATE tasks SET deadline = ?, time = ? WHERE id = ?",
                       (new_deadline, new_time, task_id))
         conn.commit()
         conn.close()
-        
+
         # Обновляем срок в Google Sheets
         update_deadline_in_sheet(task[6], new_deadline)  # task[6] - sheet_row
-        
+
         # Обновляем событие в календаре
         if task[5]:  # task[5] - calendar_event_id
             task_obj = {
@@ -570,13 +609,29 @@ async def handle_new_time_input(message: Message, state: FSMContext):
                 "deadline": new_deadline,
                 "time": new_time
             }
-            update_event(task_obj)
-        
-        await message.answer(f"⏳ Срок задачи \"{task[2]}\" продлен до {new_deadline} {new_time}")
+            try:
+                update_event(task_obj)
+                calendar_updated = "и календаре"
+            except Exception as e:
+                print(f"Ошибка при обновлении события в календаре: {e}")
+                calendar_updated = "(обновление в календаре не удалось)"
+        else:
+            calendar_updated = ""
+
+        # Форматируем дату для отображения
+        formatted_date = new_deadline
+        try:
+            # Преобразуем ISO дату в более читаемый формат
+            date_obj = datetime.strptime(new_deadline, "%Y-%m-%d")
+            formatted_date = date_obj.strftime("%d.%m.%Y")
+        except:
+            pass
+
+        await message.answer(f"⏳ Срок задачи \"{task[2]}\" продлен до {formatted_date} {new_time} в базе данных и таблице {calendar_updated}")
         await state.clear()
-        
+
     except ValueError as e:
-        await message.answer(f"⚠️ {str(e)}. Пожалуйста, введите время в одном из форматов: 10 (для 10:00) или 10:30")
+        await message.answer(f"⚠️ {str(e)}. Пожалуйста, введите время в удобном формате (например: 10 для 10:00, 15:30, 'утром', 'вечером' и т.д.)")
 
 # Функция для обновления статуса задачи в Google Sheets
 # Обновленная функция для файла task_actions.py
